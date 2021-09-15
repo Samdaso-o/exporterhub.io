@@ -303,8 +303,83 @@ class ExporterDetailView(View):
 
 
 class ExporterTabView(View):
+    def get_yaml(self, app_name, content_type, file_type, headers):
+        repo          = f"{settings.ORGANIZATION}/exporterhub.io"
+        url           = f"https://api.github.com/repos/{repo}/contents/contents/{app_name}/{app_name}_{content_type}/"
+        yaml_file     = requests.get(url, headers=headers)
+        data          = yaml_file.json()
+        yaml_contents = []
+
+        if yaml_file.status_code == 200:
+            for each_yaml in data:
+                yaml_name     = each_yaml['name']
+                if '.yaml' in yaml_name:
+                    yaml_url      = f"https://api.github.com/repos/{repo}/contents/contents/{app_name}/{app_name}_{content_type}/{yaml_name}"
+                    result        = requests.get(yaml_url, headers=headers)
+
+                    if result.status_code == 200:
+                            yaml_data = result.json()
+                            yaml_contents.append(
+                                {
+                                'yaml_file_content' : base64.b64decode(yaml_data['content']).decode('utf-8'),
+                                'yaml_url'          : yaml_url,
+                                'yaml_sha'          : yaml_data['sha']
+                                }
+                                )
+                else:
+                    pass
+
+            return yaml_contents
+
+        elif yaml_file.status_code == 404:
+            yaml_contents = {
+                'yaml_file_content' : None,
+                'yaml_url'          : None,
+                'yaml_sha'          : None,
+            }
+            return yaml_contents
+
+        else:
+            yaml_contents = "GITHUB_GET_REPO_ERROR"
+
+        return yaml_contents
+
+
+    def get_csv(self, app_name, content_type, file_type, headers):
+        repo     = f"{settings.ORGANIZATION}/exporterhub.io"
+        url      = f"https://api.github.com/repos/{repo}/contents/contents/{app_name}/{app_name}_{content_type}/{app_name}_{content_type}.{file_type}"
+        result   = requests.get(url, headers=headers)
+        data     = result.json()
+        csv_files = []
+
+        if result.status_code == 200:
+            content  = base64.b64decode(data['content']).decode('utf-8')
+            details = content.split('\n')
+            for detail in details[:-1]:
+                csv_detail = detail.split(',')
+                csv_files.append(
+                    {
+                    'yaml_id' : csv_detail[0],
+                    'desc'    : csv_detail[1],
+                    'csv_sha' : data['sha']
+                }
+                )
+            return csv_files
+
+        elif result.status_code == 404:
+            csv_files = {
+                'yaml_id' : None,
+                'desc'    : None,
+                'csv_sha' : None
+            }
+            return csv_files
+
+        else:
+            csv_files = "GITHUB_GET_REPO_ERROR"
+            return csv_files
+
     def get_contents(self, app_name, content_type, file_type, headers):
-        repo   = f"{settings.ORGANIZATION}/exporterhub.io"        
+        repo   = f"{settings.ORGANIZATION}/exporterhub.io"
         url    = f"https://api.github.com/repos/{repo}/contents/contents/{app_name}/{app_name}_{content_type}.{file_type}"
         result = requests.get(url, headers=headers)
         data   = result.json()
@@ -331,37 +406,58 @@ class ExporterTabView(View):
             exporter     = Exporter.objects.get(id=exporter_id)
             github_token = user.github_token if user else Token.objects.last().token
             headers      = {'Authorization' : 'token ' + github_token}
-
             content_type = request.GET['type']
-            file_type    = {
-                'dashboard' : 'json',
-                'helm'      : 'yaml',
-                'alert'     : 'yaml'
-            }
+            data = []
 
-            code_file_info = self.get_contents(app_name=exporter.app_name, content_type=content_type, file_type=file_type[content_type], headers=headers)
-            md_file_info   = self.get_contents(app_name=exporter.app_name, content_type=content_type, file_type='md', headers=headers)
+            if content_type == 'alert':
+                yaml_contents = self.get_yaml(app_name=exporter.app_name, content_type=content_type, file_type='yalm', headers=headers)
+                csv_file      = self.get_csv(app_name=exporter.app_name, content_type=content_type, file_type='csv', headers=headers)
+                
+                if yaml_contents == 'GITHUB_GET_REPO_ERROR' or csv_file == 'GITHUB_GET_REPO_ERROR':
+                    return JsonResponse({'message': 'GITHUB_API_FAIL'}, status=400)
 
-            if code_file_info == 'GITHUB_GET_REPO_ERROR' or md_file_info == 'GITHUB_GET_REPO_ERROR':
-                return JsonResponse({'message': 'GITHUB_API_FAIL'}, status=400)
+                if yaml_contents[0]['yaml_file_content'] == None or csv_file[0]['csv_sha'] == None:
+                    return JsonResponse(csv_file, status=200)
 
-            code_file_sha   = code_file_info['sha']
-            md_file_sha     = md_file_info['sha']
-            md_file_content = base64.b64decode(md_file_info['content']).decode('utf-8') if md_file_info['content'] else None
+                for csv_info, yaml_content in zip(csv_file, yaml_contents):
+                    data.append(
+                        {
+                            'yaml_content' : yaml_content['yaml_file_content'],
+                            'yaml_url'     : yaml_content['yaml_url'],
+                            'yaml_sha'     : yaml_content['yaml_sha'],
+                            'csv_sha'      : csv_info['csv_sha'],
+                            'yaml_id'      : csv_info['yaml_id'],
+                            'csv_desc'     : csv_info['desc'] if csv_info['desc'] else 0,
+                        }
+                    )
+                return JsonResponse({"message": data}, status=200)
 
-            data = {
-                'code_sha'   : code_file_sha,
-                'md_sha'     : md_file_sha,
-                'md_content' : md_file_content
-            }
+            else:
+                file_type    = {
+                    'dashboard' : 'json',
+                    'helm'      : 'yaml',
+                }
 
-            return JsonResponse(data, status=200)
+                code_file_info = self.get_contents(app_name=exporter.app_name, content_type=content_type, file_type=file_type[content_type], headers=headers)
+                md_file_info   = self.get_contents(app_name=exporter.app_name, content_type=content_type, file_type='md', headers=headers)
+
+                if code_file_info == 'GITHUB_GET_REPO_ERROR' or md_file_info == 'GITHUB_GET_REPO_ERROR':
+                    return JsonResponse({'message': 'GITHUB_API_FAIL'}, status=400)
+
+                md_file_content = base64.b64decode(md_file_info['content']).decode('utf-8') if md_file_info['content'] else None
+
+                data = {
+                    'md_content' : md_file_content
+                }
+
+                return JsonResponse(data, status=200)
 
         except KeyError:
             return JsonResponse({'message': 'KEY_ERROR'}, status=400)
 
         except Exporter.DoesNotExist:
             return JsonResponse({'message': 'NO_EXPORTER'}, status=404)
+
     
     def push_to_github(self, app_name, file_name, token, message, content, sha):
         repo = f"{settings.ORGANIZATION}/exporterhub.io"        
