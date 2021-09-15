@@ -32,10 +32,12 @@ class CategoryView(View):
             contents = {
                 'sha'     : data['sha']
             }
+
         elif result.status_code == 404:
             contents = {
                 'sha'     : None
             }
+
         else:
             contents = "GITHUB_GET_REPO_ERROR"
         
@@ -98,8 +100,8 @@ class CategoryView(View):
                 responses.append([reader[i][0],  reader[i][1],  reader[i][2],  reader[i][3],  reader[i][4],'\n'])
                 writer.writerow(row)
             else:
-                writer.writerow(row)
                 responses.append([reader[i][0],  reader[i][1],  reader[i][2],  reader[i][3],  reader[i][4],'\n'])
+                writer.writerow(row)
         file.close()
 
         csv_info = self.get_contents(headers={'Authorization' : 'token ' + token})
